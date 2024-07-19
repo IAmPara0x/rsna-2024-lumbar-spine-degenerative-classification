@@ -9,8 +9,6 @@ import numpy as np
 import cv2
 import copy
 
-import lib
-
 class Condition(StrEnum):
     SCS = "spinal_canal_stenosis"
     LNFN = "left_neural_foraminal_narrowing"
@@ -74,25 +72,11 @@ class ImgLabel:
     y: float
     location: Location
 
-    @staticmethod
-    def from_img_label(label: lib.ImgLabel):
-        loc = Location.from_str(label.location())
-        x = label.x
-        y = label.y
-        return ImgLabel(x,y,loc)
-
 @dataclass
 class Img:
     labels: list[ImgLabel]
     dicom: FileDataset
     SOPInstanceUID: int
-
-    @staticmethod
-    def from_dict(img: Dict) -> "Img":
-        dicom = img["dicom"]
-        SOPInstanceUID = img["SOPInstanceUID"]
-        labels = [*map(ImgLabel.from_img_label, img["labels"])]
-        return Img(labels, dicom, SOPInstanceUID)
 
     def find_label(self, f: Callable[["ImgLabel"], bool]) -> ImgLabel | None:
         r = [*filter(f, self.labels)]
@@ -186,34 +170,6 @@ class PatientInfo:
                 scans[desc] = imgs
 
         return PatientInfo(conditions=conditions, scans=scans, patient_id=patient_id)
-
-    # NOTE: This has a bug it doesn't take into account multiple scans of same type. 
-    #       Like there could be two Axial T2 folders, since it's dict.
-    @staticmethod
-    def from_dict(info: Dict) -> "PatientInfo":
-
-        scans = {}
-
-        for series_info in info["series"].values():
-            scan_type = Scan(series_info["series_description"])
-            imgs = []
-            for img in series_info["images"]:
-                img = Img.from_dict(img)
-                imgs.append(img)
-            scans[scan_type] = imgs
-
-        patient_id = info["study_id"]
-        del info["series"], info["study_id"]
-
-        conditions = {}
-        for loc,severity in info.items():
-
-            if pd.isna(severity):
-                conditions[loc] = Severity.Normal
-            else:
-                conditions[loc] = Severity(severity)
-        
-        return PatientInfo(patient_id, conditions, scans)
 
     def get_scans(self, scan: Scan):
         return self.scans[scan]
