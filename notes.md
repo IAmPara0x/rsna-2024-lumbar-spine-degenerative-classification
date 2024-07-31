@@ -56,3 +56,5 @@
 
 - [X] prepare dataset
 - [X] Train baseline model
+- [ ] create new baseline
+- [ ] Try center net

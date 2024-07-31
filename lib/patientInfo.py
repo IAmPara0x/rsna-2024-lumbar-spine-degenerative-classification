@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from enum import StrEnum
+from strenum import StrEnum
 from typing import Dict, Callable
 from pydicom import FileDataset
 import pandas as pd
@@ -29,6 +29,19 @@ class Severity(StrEnum):
     def all_severity() -> "list[Severity]":
         return [Severity.Normal, Severity.Moderate, Severity.Severe]
 
+
+    def to_int(self) -> int:
+        if self == Severity.Normal:
+            return 0
+        elif self == Severity.Moderate:
+            return 1
+        elif self == Severity.Severe:
+            return 2
+        else:
+            raise RuntimeError(f"Unexpected Severity: {self}")
+
+
+
 class DiscLevel(StrEnum):
     l1_l2 = "l1_l2"
     l2_l3 = "l2_l3"
@@ -42,6 +55,20 @@ class DiscLevel(StrEnum):
         if level == 4:
             return DiscLevel.l5_s1
         return DiscLevel(f"l{level+1}_l{level+2}")
+
+    def to_int(self) -> int:
+        if self == DiscLevel.l1_l2:
+            return 0
+        elif self == DiscLevel.l2_l3:
+            return 1
+        elif self == DiscLevel.l3_l4:
+            return 2
+        elif self == DiscLevel.l4_l5:
+            return 3
+        elif self == DiscLevel.l5_s1:
+            return 4
+        else:
+            raise RuntimeError(f"{self} is not in DiscLevel")
 
 class Scan(StrEnum):
     AxialT2 = "Axial T2"
@@ -89,6 +116,10 @@ class Img:
         return len(self.labels) != 0
 
     def resize(self, height, width) -> tuple[np.ndarray, list[ImgLabel]]:
+
+        if (img := self.dicom.pixel_array).shape == (height, width):
+            return img, self.labels
+
         img = cv2.resize(self.dicom.pixel_array, (height, width),interpolation=cv2.INTER_CUBIC)
         orig_height, orig_width = self.dicom.pixel_array.shape
 
@@ -110,29 +141,28 @@ class PatientInfo:
 
 
     @staticmethod
-    def from_df(patient_id, df, series_df, label_coord_df, img_dir) -> "PatientInfo":
+    def from_df(patient_id, df, series_df, label_coord_df, img_dir, patient_type="train") -> "PatientInfo":
 
         patient_img_dir = f"{img_dir}/{patient_id}"
 
         # This is for condition labels
         conditions = {}
-        patient_df = df[df["study_id"] == patient_id]
 
-        for col in df.columns:
+        if patient_type == "train":
 
-            if col != "study_id":
+            patient_df = df[df["study_id"] == patient_id]
+            for col in df.columns:
 
-                if pd.isna(x := patient_df[col].item()):
-                    conditions[col] = Severity.Normal
-                else:
-                    conditions[col] = Severity(x)
+                if col != "study_id":
+                    if pd.isna(x := patient_df[col].item()):
+                        conditions[col] = Severity.Normal
+                    else:
+                        conditions[col] = Severity(x)
 
 
         # columns ['study_id', 'series_id', 'series_description']
         patient_series = series_df[series_df["study_id"] == patient_id]
 
-        # columns ['study_id', 'series_id', 'instance_number', 'condition', 'level', 'x', 'y', 'series_description']
-        patient_labels = label_coord_df[label_coord_df["study_id"] == patient_id]
 
         scans = {}
 
@@ -144,8 +174,15 @@ class PatientInfo:
             # Get all the images of the series
             images_path = glob.glob(f"{series_img_path}/*.dcm")
 
-            # Get all the labels of the series of a particular patient
-            series_labels = patient_labels[patient_labels["series_id"] == series_id]
+
+
+            if patient_type == "train":
+
+                # columns ['study_id', 'series_id', 'instance_number', 'condition', 'level', 'x', 'y', 'series_description']
+                patient_labels = label_coord_df[label_coord_df["study_id"] == patient_id]
+
+                # Get all the labels of the series of a particular patient
+                series_labels = patient_labels[patient_labels["series_id"] == series_id]
 
 
             imgs = []
@@ -154,13 +191,14 @@ class PatientInfo:
                 uid = int(j.split('/')[-1].replace('.dcm', ''))
                 img = Img(SOPInstanceUID=uid, dicom=pydicom.dcmread(j), labels=[])
 
-                # Get all the labels belonging to a particular image of a series
-                img_labels = series_labels[series_labels["instance_number"] == uid]
+                if patient_type == "train":
+                    # G et all the labels belonging to a particular image of a series
+                    img_labels = series_labels[series_labels["instance_number"] == uid]
 
-                for _, label in img_labels.iterrows():
-                    location = "_".join([label["condition"].lower().replace(" ", "_"), label["level"].lower().replace("/","_")])
-                    x,y = float(label["x"]), float(label["y"])
-                    img.labels.append(ImgLabel(x=x,y=y,location=Location.from_str(location)))
+                    for _, label in img_labels.iterrows():
+                        location = "_".join([label["condition"].lower().replace(" ", "_"), label["level"].lower().replace("/","_")])
+                        x,y = float(label["x"]), float(label["y"])
+                        img.labels.append(ImgLabel(x=x,y=y,location=Location.from_str(location)))
 
                 imgs.append(img)
 
@@ -172,7 +210,10 @@ class PatientInfo:
         return PatientInfo(conditions=conditions, scans=scans, patient_id=patient_id)
 
     def get_scans(self, scan: Scan):
-        return self.scans[scan]
+        if scan in self.scans:
+            return self.scans[scan]
+        else:
+            return []
 
     def find_img(self, scan: Scan, f: Callable[[Img], bool]) -> Img | None:
         r = [*filter(f, self.scans[scan])]
